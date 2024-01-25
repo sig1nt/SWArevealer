@@ -15,6 +15,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const CLIENT_ID = "okta.2b1959c8-bcc0-56eb-a589-cfcfb7422f26"
+
 type SiteResponse struct {
 	Sites []struct {
 		ScriptURI string `json:"scriptURI"`
@@ -116,23 +118,39 @@ func getSidForClient(client *http.Client, baseUrl *url.URL, username, password s
 	return nil
 }
 
-func getOauthToken(client *http.Client) (*oauth2.Token, error) {
-	verifier := oauth2.GenerateVerifier()
+func getOauthToken(client *http.Client, baseUrl *url.URL) (*oauth2.Token, error) {
+
+	authUrl, err := baseUrl.Parse("/oauth2/v1/authorize")
+	if err != nil {
+		return nil, err
+	}
+
+	tokenUrl, err := baseUrl.Parse("/oauth2/v1/token")
+	if err != nil {
+		return nil, err
+	}
+
+	callbackUrl, err := baseUrl.Parse("/enduser/callback")
+	if err != nil {
+		return nil, err
+	}
+
 	config := &oauth2.Config{
-		ClientID: "okta.2b1959c8-bcc0-56eb-a589-cfcfb7422f26",
+		ClientID: CLIENT_ID,
 		Endpoint: oauth2.Endpoint {
-			AuthURL: "https://bugcrowd-sigint-1.oktapreview.com/oauth2/v1/authorize",
-			TokenURL: "https://bugcrowd-sigint-1.oktapreview.com/oauth2/v1/token",
+			AuthURL: authUrl.String(),
+			TokenURL: tokenUrl.String(),
 		},
-		RedirectURL: "https://bugcrowd-sigint-1.oktapreview.com/enduser/callback",
+		RedirectURL: callbackUrl.String(),
 		Scopes: []string{"openid", "profile", "email", "okta.users.read.self",
 			"okta.users.manage.self", "okta.internal.enduser.read",
 			"okta.internal.enduser.manage", "okta.enduser.dashboard.read",
 			"okta.enduser.dashboard.manage"},
 	}
 
+	verifier := oauth2.GenerateVerifier()
 	url := config.AuthCodeURL("state", 
-		oauth2.SetAuthURLParam("nonce", "lWqTSVTcG2NgnNh6UVShUauVsvCEHJBQXIULeZSGDzyTQKMAvFdDavwtPwroHavT"),
+		oauth2.SetAuthURLParam("nonce", "QWqTSVTcG2NgnNh6UVShUauVsvCEHFBQXIULeZSGRzyTQKMAvFdDavwtPwroHavT"),
 		oauth2.S256ChallengeOption(verifier))
 
 	resp, err := client.Get(url)
@@ -164,74 +182,33 @@ func NewCookieJarClient() (*http.Client, error) {
 
 }
 
-type Options struct {
-	username		string
-	password		string
-	baseUrl			*url.URL
-	instanceName	string
-	appId			string
-}
-
-func handleCLI() (Options, error) {
-	rawUrl := flag.String("url", "", "The Okta URL to get the password for")
+func main() {
+	rawUrl := flag.String("url", "", "The base URL for the Okta instance")
 	username := flag.String("username", "", "The Okta username")
 	password := flag.String("password", "", "The Okta password")
 
 	flag.Parse()
 
 	if rawUrl == nil || username == nil || password == nil {
-		return Options{}, fmt.Errorf("Failed to provide correct commands")
+		panic("Failed to provide correct commands")
 	}
 
-	parsedUrl, err := url.Parse(*rawUrl)
-	if err != nil {
-		return Options{}, err
-	}
-
-	pathParts := strings.Split(strings.Trim(parsedUrl.Path, "/"), "/")
-
-	if len(pathParts) != 4 {
-		return Options{}, fmt.Errorf("Improperly formatted URL")
-	}
-
-	instanceName := pathParts[1]
-	appId := pathParts[2]
-
-	return Options {
-		username: *username,
-		password: *password,
-		baseUrl: &url.URL {
-			Scheme: "https",
-			Host: parsedUrl.Host,
-		},
-		instanceName: instanceName,
-		appId: appId, 
-	}, nil
-}
-
-func main() {
-	options, err := handleCLI()
+	baseUrl, err := url.Parse(*rawUrl)
 	if err != nil {
 		panic(err)
 	}
-
-	username := options.username
-	password := options.password
-	baseUrl := options.baseUrl
-	// instanceName := options.instanceName
-	// appId := options.appId
 
 	client, err := NewCookieJarClient()
 	if err != nil {
 		panic(err)
 	}
 
-	err = getSidForClient(client, baseUrl, username, password)
+	err = getSidForClient(client, baseUrl, *username, *password)
 	if err != nil {
 		panic(err)
 	}
 
-	token, err := getOauthToken(client)
+	token, err := getOauthToken(client, baseUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -259,8 +236,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	fmt.Println(siteJson.Sites[0].ScriptURI)
 
 	for _, site := range siteJson.Sites {
 		passwordUrl, err := baseUrl.Parse(site.ScriptURI)
