@@ -15,6 +15,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type SiteResponse struct {
+	Sites []struct {
+		ScriptURI string `json:"scriptURI"`
+	} `json:"site"`
+}
+
 type FlowResponse struct {
 	Scripts struct {
 		Script []struct {
@@ -110,7 +116,7 @@ func getSidForClient(client *http.Client, baseUrl *url.URL, username, password s
 	return nil
 }
 
-func doOauthIGuess(client *http.Client) error {
+func getOauthToken(client *http.Client) (*oauth2.Token, error) {
 	verifier := oauth2.GenerateVerifier()
 	config := &oauth2.Config{
 		ClientID: "okta.2b1959c8-bcc0-56eb-a589-cfcfb7422f26",
@@ -128,27 +134,19 @@ func doOauthIGuess(client *http.Client) error {
 	url := config.AuthCodeURL("state", 
 		oauth2.SetAuthURLParam("nonce", "lWqTSVTcG2NgnNh6UVShUauVsvCEHJBQXIULeZSGDzyTQKMAvFdDavwtPwroHavT"),
 		oauth2.S256ChallengeOption(verifier))
-	fmt.Println(url)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	loc, err := resp.Location()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	code := loc.Query().Get("code")
 
-	token, err := config.Exchange(context.Background(), code, oauth2.VerifierOption(verifier))
-	if err != nil {
-		return err
-	}
-
-	fmt.Println(token)
-
-	return nil
+	return config.Exchange(context.Background(), code, oauth2.VerifierOption(verifier))
 }
 
 func NewCookieJarClient() (*http.Client, error) {
@@ -220,8 +218,8 @@ func main() {
 	username := options.username
 	password := options.password
 	baseUrl := options.baseUrl
-	instanceName := options.instanceName
-	appId := options.appId
+	// instanceName := options.instanceName
+	// appId := options.appId
 
 	client, err := NewCookieJarClient()
 	if err != nil {
@@ -233,37 +231,64 @@ func main() {
 		panic(err)
 	}
 
-	err = doOauthIGuess(client)
-	if err != nil {
-		panic(err)
-	}
-	panic("End")
-
-	passwordUrl, err := baseUrl.Parse(fmt.Sprintf("/api/plugin/2/app/%s/%s/flow", instanceName, appId))
+	token, err := getOauthToken(client)
 	if err != nil {
 		panic(err)
 	}
 
-	req, err := http.NewRequest("GET", passwordUrl.String(), nil)
+	sitesUrl, err := baseUrl.Parse("/api/plugin/2/sites")
 	if err != nil {
 		panic(err)
 	}
 
-	req.Header.Add("Accept", "application/json")
+	req, err := http.NewRequest("GET", sitesUrl.String(), nil)
+	if err != nil {
+		panic(err)
+	}
+
+	token.SetAuthHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
 	}
 
-	respJson := FlowResponse{}
+	siteJson := SiteResponse{}
 
-	err = json.NewDecoder(resp.Body).Decode(&respJson)
+	err = json.NewDecoder(resp.Body).Decode(&siteJson)
 	if err != nil {
 		panic(err)
 	}
 
-	data := respJson.Scripts.Script[0].Action[0]
+	fmt.Println(siteJson.Sites[0].ScriptURI)
 
-	fmt.Printf("%s/%s\n", data.Username, data.Password)
+	for _, site := range siteJson.Sites {
+		passwordUrl, err := baseUrl.Parse(site.ScriptURI)
+		if err != nil {
+			panic(err)
+		}
+
+		req, err = http.NewRequest("GET", passwordUrl.String(), nil)
+		if err != nil {
+			panic(err)
+		}
+
+		req.Header.Add("Accept", "application/json")
+
+		resp, err = client.Do(req)
+		if err != nil {
+			panic(err)
+		}
+
+		respJson := FlowResponse{}
+
+		err = json.NewDecoder(resp.Body).Decode(&respJson)
+		if err != nil {
+			panic(err)
+		}
+
+		data := respJson.Scripts.Script[0].Action[0]
+
+		fmt.Printf("%s/%s\n", data.Username, data.Password)
+	}
 }
