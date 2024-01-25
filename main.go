@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+
+	"golang.org/x/oauth2"
 )
 
 type FlowResponse struct {
@@ -107,13 +110,59 @@ func getSidForClient(client *http.Client, baseUrl *url.URL, username, password s
 	return nil
 }
 
+func doOauthIGuess(client *http.Client) error {
+	verifier := oauth2.GenerateVerifier()
+	config := &oauth2.Config{
+		ClientID: "okta.2b1959c8-bcc0-56eb-a589-cfcfb7422f26",
+		Endpoint: oauth2.Endpoint {
+			AuthURL: "https://bugcrowd-sigint-1.oktapreview.com/oauth2/v1/authorize",
+			TokenURL: "https://bugcrowd-sigint-1.oktapreview.com/oauth2/v1/token",
+		},
+		RedirectURL: "https://bugcrowd-sigint-1.oktapreview.com/enduser/callback",
+		Scopes: []string{"openid", "profile", "email", "okta.users.read.self",
+			"okta.users.manage.self", "okta.internal.enduser.read",
+			"okta.internal.enduser.manage", "okta.enduser.dashboard.read",
+			"okta.enduser.dashboard.manage"},
+	}
+
+	url := config.AuthCodeURL("state", 
+		oauth2.SetAuthURLParam("nonce", "lWqTSVTcG2NgnNh6UVShUauVsvCEHJBQXIULeZSGDzyTQKMAvFdDavwtPwroHavT"),
+		oauth2.S256ChallengeOption(verifier))
+	fmt.Println(url)
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+
+	loc, err := resp.Location()
+	if err != nil {
+		return err
+	}
+	code := loc.Query().Get("code")
+
+	token, err := config.Exchange(context.Background(), code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(token)
+
+	return nil
+}
+
 func NewCookieJarClient() (*http.Client, error) {
 	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: nil})
 	if err != nil {
 		return nil, err
 	}
 
-	return &http.Client{ Jar: jar }, nil
+	return &http.Client{
+		Jar: jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}, nil
 
 }
 
@@ -183,6 +232,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	err = doOauthIGuess(client)
+	if err != nil {
+		panic(err)
+	}
+	panic("End")
 
 	passwordUrl, err := baseUrl.Parse(fmt.Sprintf("/api/plugin/2/app/%s/%s/flow", instanceName, appId))
 	if err != nil {
